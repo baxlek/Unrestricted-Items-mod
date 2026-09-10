@@ -3,6 +3,8 @@
 #include "mods/svc/hook.h"
 #include "mods/svc/log.h"
 
+#include <vector>
+
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item_data.h"
@@ -90,25 +92,26 @@ void on_check_new_item_change_post(ModContext*, void* args, void* retval, void*)
     result = ITEM_PROC_COMMON_CHANGE_ITEM;
 }
 
-bool g_restore_light_off_flag = false;
+std::vector<daAlink_c*> g_set_light_restore_stack;
 
 HookAction on_set_light_pre(ModContext*, void* args, void*, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
-    g_restore_light_off_flag = false;
     if (lantern_in_water(player) &&
         !player->checkNoResetFlg2(daAlink_c::FLG2_KANDELAAR_LIGHT_OFF))
     {
         player->onNoResetFlg2(daAlink_c::FLG2_KANDELAAR_LIGHT_OFF);
-        g_restore_light_off_flag = true;
+        g_set_light_restore_stack.push_back(player);
     }
     return HOOK_CONTINUE;
 }
 
 void on_set_light_post(ModContext*, void* args, void*, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
-    if (g_restore_light_off_flag) {
+    if (!g_set_light_restore_stack.empty() &&
+        g_set_light_restore_stack.back() == player)
+    {
         player->offNoResetFlg2(daAlink_c::FLG2_KANDELAAR_LIGHT_OFF);
-        g_restore_light_off_flag = false;
+        g_set_light_restore_stack.pop_back();
     }
 }
 
@@ -122,7 +125,7 @@ void replace_check_accept_use_item_in_water(ModContext*, void* args, void* retva
         return;
     }
 
-    result = CheckAcceptUseItemInWater::g_orig(player, item_no);
+    result = CheckAcceptUseItemInWater::g_orig(player, item_no) != FALSE;
 }
 
 void replace_swim_delete_item(ModContext*, void* args, void*, void*) {
