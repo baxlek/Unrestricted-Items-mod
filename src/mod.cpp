@@ -70,35 +70,35 @@ void on_check_kandelaar_swing_post(ModContext*, void* args, void* retval, void*)
     }
 }
 
-void on_check_new_item_change_post(ModContext*, void* args, void* retval, void*) {
+void replace_check_new_item_change(ModContext*, void* args, void* retval, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
     const u8 selected_slot = mods::arg<u8>(args, 1);
-    auto& result = *static_cast<int*>(retval);
-
-    if (result != ITEM_PROC_NONE || player->mLinkAcch.ChkGroundHit()) {
-        return;
-    }
-
     const u16 selected_item = dComIfGp_getSelectItem(selected_slot);
-    if (selected_item != dItemNo_KANTERA_e ||
-        player->mEquipItem == selected_item ||
-        !unrestricted_items_active(player) ||
-        player->checkEndResetFlg1(daAlink_c::ERFLG1_UNK_4) ||
-        player->checkSpinnerRide() ||
-        water_in_kandelaar_offset(player, player->mWaterY) ||
-        (player->checkCanoeRide() && daAlink_c::checkStageName("F_SP127")) ||
-        daAlink_c::checkCloudSea() ||
-        !daAlink_c::checkCastleTownUseItem(selected_item) ||
-        player->checkBoardRide() ||
-        player->checkMagneBootsOn())
-    {
-        return;
+    const bool bypass_water_checks = unrestricted_items_active(player);
+    const f32 saved_water_y = player->mWaterY;
+
+    if (bypass_water_checks) {
+        player->offNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
+        if (selected_item == dItemNo_KANTERA_e || daAlink_c::checkOilBottleItem(selected_item)) {
+            player->mWaterY = player->current.pos.y;
+        }
     }
 
-    result = ITEM_PROC_COMMON_CHANGE_ITEM;
+    auto& result = *static_cast<int*>(retval);
+    result = CheckNewItemChange::g_orig(player, selected_slot);
+
+    if (bypass_water_checks) {
+        player->onNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
+        player->mWaterY = saved_water_y;
+    }
 }
 
 std::vector<daAlink_c*> g_set_light_restore_stack;
+struct SavedOilCount {
+    daAlink_c* player;
+    s32 oil_count;
+};
+std::vector<SavedOilCount> g_init_kandelaar_swing_oil_stack;
 
 HookAction on_set_light_pre(ModContext*, void* args, void*, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
@@ -151,33 +151,29 @@ void replace_swim_delete_item(ModContext*, void* args, void*, void*) {
     }
 }
 
-void replace_init_kandelaar_swing(ModContext*, void* args, void*, void*) {
+HookAction on_init_kandelaar_swing_pre(ModContext*, void* args, void*, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
+    if (player->mEquipItem == dItemNo_KANTERA_e &&
+        lantern_in_water(player) &&
+        !player->checkEventRun())
+    {
+        g_init_kandelaar_swing_oil_stack.push_back({player, dComIfGs_getOil()});
+    }
+    return HOOK_CONTINUE;
+}
 
-    if (player->mEquipItem == dItemNo_KANTERA_e) {
-        if (dComIfGs_getOil() != 0) {
-            player->mZ2Link.getKantera().startSound(
-                Z2SE_AL_KANTERA_SWING, 0, player->mVoiceReverbIntensity);
-        } else {
-            player->mZ2Link.getKantera().startSound(
-                Z2SE_AL_KANTERA_OFF_SWING, 0, player->mVoiceReverbIntensity);
+void on_init_kandelaar_swing_post(ModContext*, void* args, void*, void*) {
+    auto* player = mods::arg<daAlink_c*>(args, 0);
+    if (!g_init_kandelaar_swing_oil_stack.empty() &&
+        g_init_kandelaar_swing_oil_stack.back().player == player)
+    {
+        const s32 saved_oil = g_init_kandelaar_swing_oil_stack.back().oil_count;
+        g_init_kandelaar_swing_oil_stack.pop_back();
+        const s32 oil_delta = saved_oil - dComIfGs_getOil();
+        if (oil_delta > 0) {
+            dComIfGp_setItemOilCount(oil_delta);
         }
     }
-
-    player->voiceStart(Z2SE_AL_V_SWING_BOTTLE);
-    player->mAtSph.ResetAtHit();
-
-    if (!player->checkEventRun() && !lantern_in_water(player)) {
-        dComIfGp_setItemOilCount(-player->mpHIO->mItem.mLantern.m.mShakeOilLoss);
-    }
-
-    player->mAtSph.OffAtSetBit();
-    player->mAtSph.SetR(50.0f);
-    player->mAtSph.SetAtType(AT_TYPE_LANTERN_SWING);
-    player->mAtSph.SetAtHitMark(0);
-    player->mAtSph.SetAtSe(dCcD_SE_NONE);
-    player->mAtSph.SetAtAtp(0);
-    player->mAtSph.SetAtMtrl(dCcD_MTRL_FIRE);
 }
 
 ModResult install_hook(ModResult result, const char* name) {
@@ -225,15 +221,22 @@ MOD_EXPORT ModResult mod_initialize(ModError*) {
     }
 
     result = install_hook(
-        mods::hook_replace<InitKandelaarSwing>(svc_hook, replace_init_kandelaar_swing),
-        "failed to install InitKandelaarSwing");
+        mods::hook_add_pre<InitKandelaarSwing>(svc_hook, on_init_kandelaar_swing_pre),
+        "failed to install InitKandelaarSwing pre-hook");
     if (result != MOD_OK) {
         return result;
     }
 
     result = install_hook(
-        mods::hook_add_post<CheckNewItemChange>(
-            svc_hook, on_check_new_item_change_post),
+        mods::hook_add_post<InitKandelaarSwing>(svc_hook, on_init_kandelaar_swing_post),
+        "failed to install InitKandelaarSwing post-hook");
+    if (result != MOD_OK) {
+        return result;
+    }
+
+    result = install_hook(
+        mods::hook_replace<CheckNewItemChange>(
+            svc_hook, replace_check_new_item_change),
         "failed to install CheckNewItemChange");
     if (result != MOD_OK) {
         return result;
