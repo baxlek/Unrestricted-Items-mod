@@ -51,13 +51,8 @@ enum daAlink_ItemProc {
     ITEM_PROC_GRASS_WHISTLE = 15,
 };
 
-bool unrestricted_items_enabled() {
-    return true;
-}
-
 bool unrestricted_items_water_active(const daAlink_c* player) {
-    return unrestricted_items_enabled() &&
-           player->checkNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
+    return player->checkNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
 }
 
 bool unrestricted_items_camera_stage() {
@@ -226,7 +221,6 @@ void replace_check_new_item_change(ModContext*, void* args, void* retval, void*)
     const u16 selected_item = dComIfGp_getSelectItem(selected_slot);
     const bool bypass_water_checks = unrestricted_items_water_active(player);
     const bool bypass_lantern_water_check =
-        unrestricted_items_enabled() &&
         (selected_item == dItemNo_KANTERA_e || daAlink_c::checkOilBottleItem(selected_item));
     const f32 saved_water_y = player->mWaterY;
 
@@ -240,7 +234,7 @@ void replace_check_new_item_change(ModContext*, void* args, void* retval, void*)
     auto& result = *static_cast<int*>(retval);
     result = CheckNewItemChange::g_orig(player, selected_slot);
 
-    if (unrestricted_items_enabled() && result == ITEM_PROC_NONE) {
+    if (result == ITEM_PROC_NONE) {
         result = unrestricted_items_fallback_new_item_change(player, selected_slot, selected_item);
     }
 
@@ -311,7 +305,7 @@ void replace_swim_delete_item(ModContext*, void* args, void*, void*) {
 void replace_check_no_subject_mode_camera(ModContext*, void* args, void* retval, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
     auto& result = *static_cast<bool*>(retval);
-    if (unrestricted_items_enabled() && unrestricted_items_camera_stage()) {
+    if (unrestricted_items_camera_stage()) {
         result = player->checkCargoCarry();
         return;
     }
@@ -321,12 +315,7 @@ void replace_check_no_subject_mode_camera(ModContext*, void* args, void* retval,
 
 void replace_check_not_heavy_boots_stage(ModContext*, void*, void* retval, void*) {
     auto& result = *static_cast<bool*>(retval);
-    if (unrestricted_items_enabled()) {
-        result = false;
-        return;
-    }
-
-    result = CheckNotHeavyBootsStage::g_orig();
+    result = false;
 }
 
 void replace_set_start_proc_init(ModContext*, void* args, void* retval, void*) {
@@ -334,8 +323,7 @@ void replace_set_start_proc_init(ModContext*, void* args, void* retval, void*) {
     auto& result = *static_cast<int*>(retval);
     result = SetStartProcInit::g_orig(player);
 
-    if (!unrestricted_items_enabled() || player->checkWolf() ||
-        player->mEquipItem != dItemNo_NONE_e)
+    if (player->checkWolf() || player->mEquipItem != dItemNo_NONE_e)
     {
         return;
     }
@@ -354,7 +342,6 @@ void replace_set_start_proc_init(ModContext*, void* args, void* retval, void*) {
 void replace_check_item_action(ModContext*, void* args, void* retval, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
     const bool bypass_fishing_water_limit =
-        unrestricted_items_enabled() &&
         daAlink_c::checkFishingRodItem(player->mEquipItem) &&
         player->mLinkAcch.ChkGroundHit() &&
         !player->checkNoResetFlg0(daAlink_c::FLG0_SWIM_UP);
@@ -374,7 +361,7 @@ void replace_check_item_change_from_button(ModContext*, void* args, void* retval
     auto& result = *static_cast<BOOL*>(retval);
     result = CheckItemChangeFromButton::g_orig(player);
 
-    if (result || !unrestricted_items_enabled()) {
+    if (result) {
         return;
     }
 
@@ -397,7 +384,6 @@ void replace_check_item_change_from_button(ModContext*, void* args, void* retval
 void replace_proc_grass_whistle_wait(ModContext*, void* args, void* retval, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
     const bool suppress_underwater_horse_call =
-        unrestricted_items_enabled() &&
         (player->mProcVar2.field_0x300c == 1 || player->mProcVar2.field_0x300c == 3) &&
         player->mProcVar0.field_0x3008 == 1 &&
         !player->checkNoResetFlg0(daAlink_c::FLG0_SWIM_UP);
@@ -418,7 +404,7 @@ void replace_change_mode_ok(ModContext*, void* args, void* retval, void*) {
     auto& result = *static_cast<bool*>(retval);
     result = ChangeModeOK::g_orig(camera, mode);
 
-    if (result || !unrestricted_items_enabled() || !unrestricted_items_camera_stage()) {
+    if (result || !unrestricted_items_camera_stage()) {
         return;
     }
 
