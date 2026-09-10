@@ -1,7 +1,9 @@
 #include "mods/hook.hpp"
 #include "mods/service.hpp"
+#include "mods/svc/config.h"
 #include "mods/svc/hook.h"
 #include "mods/svc/log.h"
+#include "mods/svc/ui.h"
 
 #include <vector>
 
@@ -14,6 +16,8 @@ DEFINE_MOD();
 
 IMPORT_SERVICE(LogService, svc_log);
 IMPORT_SERVICE(HookService, svc_hook);
+IMPORT_SERVICE(ConfigService, svc_config);
+IMPORT_SERVICE(UiService, svc_ui);
 
 DEFINE_HOOK(&daAlink_c::checkAcceptUseItemInWater, CheckAcceptUseItemInWater);
 DEFINE_HOOK(&daAlink_c::setStartProcInit, SetStartProcInit);
@@ -31,6 +35,18 @@ DEFINE_HOOK(&daAlink_c::setLight, SetLight);
 DEFINE_HOOK(&dCamera_c::ChangeModeOK, ChangeModeOK);
 
 namespace {
+
+ConfigVarHandle g_cvar_enabled = 0;
+
+bool unrestricted_items_enabled() {
+    bool enabled = false;
+    if (g_cvar_enabled != 0 &&
+        svc_config->get_bool(mod_ctx, g_cvar_enabled, &enabled) == MOD_OK)
+    {
+        return enabled;
+    }
+    return false;
+}
 
 enum daAlink_ItemProc {
     ITEM_PROC_NONE = 0,
@@ -52,7 +68,8 @@ enum daAlink_ItemProc {
 };
 
 bool unrestricted_items_water_active(const daAlink_c* player) {
-    return player->checkNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
+    return unrestricted_items_enabled() &&
+           player->checkNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
 }
 
 bool unrestricted_items_camera_stage() {
@@ -76,6 +93,10 @@ bool lantern_in_water(const daAlink_c* player) {
 
 int unrestricted_items_fallback_new_item_change(daAlink_c* player, u8 selected_slot,
                                                 u16 selected_item) {
+    if (!unrestricted_items_enabled()) {
+        return ITEM_PROC_NONE;
+    }
+
     if (player->checkSpinnerRide() || selected_item == dItemNo_BOMB_BAG_LV1_e) {
         return ITEM_PROC_NONE;
     }
@@ -221,6 +242,7 @@ void replace_check_new_item_change(ModContext*, void* args, void* retval, void*)
     const u16 selected_item = dComIfGp_getSelectItem(selected_slot);
     const bool bypass_water_checks = unrestricted_items_water_active(player);
     const bool bypass_lantern_water_check =
+        unrestricted_items_enabled() &&
         (selected_item == dItemNo_KANTERA_e || daAlink_c::checkOilBottleItem(selected_item));
     const f32 saved_water_y = player->mWaterY;
 
@@ -234,7 +256,7 @@ void replace_check_new_item_change(ModContext*, void* args, void* retval, void*)
     auto& result = *static_cast<int*>(retval);
     result = CheckNewItemChange::g_orig(player, selected_slot);
 
-    if (result == ITEM_PROC_NONE) {
+    if (unrestricted_items_enabled() && result == ITEM_PROC_NONE) {
         result = unrestricted_items_fallback_new_item_change(player, selected_slot, selected_item);
     }
 
@@ -305,7 +327,7 @@ void replace_swim_delete_item(ModContext*, void* args, void*, void*) {
 void replace_check_no_subject_mode_camera(ModContext*, void* args, void* retval, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
     auto& result = *static_cast<bool*>(retval);
-    if (unrestricted_items_camera_stage()) {
+    if (unrestricted_items_enabled() && unrestricted_items_camera_stage()) {
         result = player->checkCargoCarry();
         return;
     }
@@ -315,7 +337,12 @@ void replace_check_no_subject_mode_camera(ModContext*, void* args, void* retval,
 
 void replace_check_not_heavy_boots_stage(ModContext*, void*, void* retval, void*) {
     auto& result = *static_cast<bool*>(retval);
-    result = false;
+    if (unrestricted_items_enabled()) {
+        result = false;
+        return;
+    }
+
+    result = CheckNotHeavyBootsStage::g_orig();
 }
 
 void replace_set_start_proc_init(ModContext*, void* args, void* retval, void*) {
@@ -323,7 +350,8 @@ void replace_set_start_proc_init(ModContext*, void* args, void* retval, void*) {
     auto& result = *static_cast<int*>(retval);
     result = SetStartProcInit::g_orig(player);
 
-    if (player->checkWolf() || player->mEquipItem != dItemNo_NONE_e)
+    if (!unrestricted_items_enabled() || player->checkWolf() ||
+        player->mEquipItem != dItemNo_NONE_e)
     {
         return;
     }
@@ -342,6 +370,7 @@ void replace_set_start_proc_init(ModContext*, void* args, void* retval, void*) {
 void replace_check_item_action(ModContext*, void* args, void* retval, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
     const bool bypass_fishing_water_limit =
+        unrestricted_items_enabled() &&
         daAlink_c::checkFishingRodItem(player->mEquipItem) &&
         player->mLinkAcch.ChkGroundHit() &&
         !player->checkNoResetFlg0(daAlink_c::FLG0_SWIM_UP);
@@ -361,7 +390,7 @@ void replace_check_item_change_from_button(ModContext*, void* args, void* retval
     auto& result = *static_cast<BOOL*>(retval);
     result = CheckItemChangeFromButton::g_orig(player);
 
-    if (result) {
+    if (result || !unrestricted_items_enabled()) {
         return;
     }
 
@@ -384,6 +413,7 @@ void replace_check_item_change_from_button(ModContext*, void* args, void* retval
 void replace_proc_grass_whistle_wait(ModContext*, void* args, void* retval, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
     const bool suppress_underwater_horse_call =
+        unrestricted_items_enabled() &&
         (player->mProcVar2.field_0x300c == 1 || player->mProcVar2.field_0x300c == 3) &&
         player->mProcVar0.field_0x3008 == 1 &&
         !player->checkNoResetFlg0(daAlink_c::FLG0_SWIM_UP);
@@ -404,7 +434,7 @@ void replace_change_mode_ok(ModContext*, void* args, void* retval, void*) {
     auto& result = *static_cast<bool*>(retval);
     result = ChangeModeOK::g_orig(camera, mode);
 
-    if (result || !unrestricted_items_camera_stage()) {
+    if (result || !unrestricted_items_enabled() || !unrestricted_items_camera_stage()) {
         return;
     }
 
@@ -448,11 +478,39 @@ ModResult install_hook(ModResult result, const char* name) {
     return result;
 }
 
+ModResult build_panel(ModContext*, UiElementHandle panel, void*, ModError*) {
+    UiControlDesc control = UI_CONTROL_DESC_INIT;
+    control.kind = UI_CONTROL_TOGGLE;
+    control.label = "Enabled";
+    control.binding = UI_BINDING_CONFIG_VAR;
+    control.config_var = g_cvar_enabled;
+    return svc_ui->pane_add_control(mod_ctx, panel, &control, nullptr);
+}
+
 }  // namespace
 
 extern "C" {
 MOD_EXPORT ModResult mod_initialize(ModError*) {
     ModResult result = MOD_OK;
+
+    ConfigVarDesc enabled_desc = CONFIG_VAR_DESC_INIT;
+    enabled_desc.name = "unrestrictedItemsEnabled";
+    enabled_desc.type = CONFIG_VAR_BOOL;
+    enabled_desc.default_bool = false;
+
+    result = svc_config->register_var(mod_ctx, &enabled_desc, &g_cvar_enabled);
+    if (result != MOD_OK) {
+        svc_log->error(mod_ctx, "failed to register unrestricted-items cvar");
+        return result;
+    }
+
+    UiModsPanelDesc panel_desc = UI_MODS_PANEL_DESC_INIT;
+    panel_desc.build = build_panel;
+    result = svc_ui->register_mods_panel(mod_ctx, &panel_desc);
+    if (result != MOD_OK) {
+        svc_log->error(mod_ctx, "failed to register unrestricted-items mod panel");
+        return result;
+    }
 
     result = install_hook(
         mods::hook_replace<CheckAcceptUseItemInWater>(
