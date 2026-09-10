@@ -9,12 +9,12 @@
     {
       "service_id": "dev.twilitrealm.dusklight.config",
       "major": 2,
-      "min_monor": 0,
+      "min_minor": 0,
       "optional": false
     },
     {
       "service_id": "dev.twilitrealm.dusklight.game",
-      "major": 1,
+      "major": 2,
       "min_minor": 0,
       "optional": false
     },
