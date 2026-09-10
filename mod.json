@@ -1,7 +1,7 @@
 {
-  "id": "com.example.my_mod",
-  "name": "My Mod",
+  "id": "com.baxlek.unrestricted_items",
+  "name": "Unrestricted Items",
   "version": "1.0.0",
-  "author": "You",
-  "description": "An example Dusklight mod"
+  "author": "baxlek",
+  "description": "Enables the Dusklight unrestricted-items cheat as a standalone mod."
 }
