@@ -20,6 +20,8 @@ DEFINE_HOOK(&daAlink_c::checkWaterInKandelaar, CheckWaterInKandelaar);
 DEFINE_HOOK(&daAlink_c::checkKandelaarSwing, CheckKandelaarSwing);
 DEFINE_HOOK(&daAlink_c::initKandelaarSwing, InitKandelaarSwing);
 DEFINE_HOOK(&daAlink_c::checkNewItemChange, CheckNewItemChange);
+DEFINE_HOOK(&daAlink_c::checkNoSubjectModeCamera, CheckNoSubjectModeCamera);
+DEFINE_HOOK(&daAlink_c::checkNotHeavyBootsStage, CheckNotHeavyBootsStage);
 DEFINE_HOOK(&daAlink_c::setLight, SetLight);
 
 namespace {
@@ -29,8 +31,13 @@ enum daAlink_ItemProc {
     ITEM_PROC_COMMON_CHANGE_ITEM = 12,
 };
 
-bool unrestricted_items_active(const daAlink_c* player) {
-    return player->checkNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
+bool unrestricted_items_enabled() {
+    return true;
+}
+
+bool unrestricted_items_water_active(const daAlink_c* player) {
+    return unrestricted_items_enabled() &&
+           player->checkNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
 }
 
 bool water_in_kandelaar_offset(const daAlink_c* player, f32 water_y) {
@@ -40,7 +47,7 @@ bool water_in_kandelaar_offset(const daAlink_c* player, f32 water_y) {
 }
 
 bool lantern_in_water(const daAlink_c* player) {
-    return unrestricted_items_active(player) &&
+    return unrestricted_items_water_active(player) &&
            water_in_kandelaar_offset(player, player->mWaterY);
 }
 
@@ -48,7 +55,7 @@ HookAction on_check_water_in_kandelaar_pre(ModContext*, void* args, void*, void*
     auto* player = mods::arg<daAlink_c*>(args, 0);
     const f32 water_y = mods::arg<f32>(args, 1);
     if (player->mEquipItem == dItemNo_KANTERA_e &&
-        unrestricted_items_active(player) &&
+        unrestricted_items_water_active(player) &&
         player->checkNoResetFlg2(daAlink_c::FLG2_UNK_1) &&
         water_in_kandelaar_offset(player, water_y))
     {
@@ -74,14 +81,17 @@ void replace_check_new_item_change(ModContext*, void* args, void* retval, void*)
     auto* player = mods::arg<daAlink_c*>(args, 0);
     const u8 selected_slot = mods::arg<u8>(args, 1);
     const u16 selected_item = dComIfGp_getSelectItem(selected_slot);
-    const bool bypass_water_checks = unrestricted_items_active(player);
+    const bool bypass_water_checks = unrestricted_items_water_active(player);
+    const bool bypass_lantern_water_check =
+        unrestricted_items_enabled() &&
+        (selected_item == dItemNo_KANTERA_e || daAlink_c::checkOilBottleItem(selected_item));
     const f32 saved_water_y = player->mWaterY;
 
     if (bypass_water_checks) {
         player->offNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
-        if (selected_item == dItemNo_KANTERA_e || daAlink_c::checkOilBottleItem(selected_item)) {
-            player->mWaterY = player->current.pos.y;
-        }
+    }
+    if (bypass_lantern_water_check) {
+        player->mWaterY = player->current.pos.y;
     }
 
     auto& result = *static_cast<int*>(retval);
@@ -89,8 +99,8 @@ void replace_check_new_item_change(ModContext*, void* args, void* retval, void*)
 
     if (bypass_water_checks) {
         player->onNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
-        player->mWaterY = saved_water_y;
     }
+    player->mWaterY = saved_water_y;
 }
 
 std::vector<daAlink_c*> g_set_light_restore_stack;
@@ -126,7 +136,7 @@ void replace_check_accept_use_item_in_water(ModContext*, void* args, void* retva
     const u16 item_no = mods::arg<u16>(args, 1);
     auto& result = *static_cast<BOOL*>(retval);
 
-    if (unrestricted_items_active(player)) {
+    if (unrestricted_items_water_active(player)) {
         result = true;
         return;
     }
@@ -137,7 +147,7 @@ void replace_check_accept_use_item_in_water(ModContext*, void* args, void* retva
 void replace_swim_delete_item(ModContext*, void* args, void*, void*) {
     auto* player = mods::arg<daAlink_c*>(args, 0);
     const bool keep_lantern_out =
-        player->mEquipItem == dItemNo_KANTERA_e && unrestricted_items_active(player);
+        player->mEquipItem == dItemNo_KANTERA_e && unrestricted_items_water_active(player);
 
     if (!player->checkHookshotItem(player->mEquipItem) &&
         !keep_lantern_out &&
@@ -149,6 +159,27 @@ void replace_swim_delete_item(ModContext*, void* args, void*, void*) {
     if (!keep_lantern_out && player->checkNoResetFlg2(daAlink_c::FLG2_UNK_1)) {
         player->offKandelaarModel();
     }
+}
+
+void replace_check_no_subject_mode_camera(ModContext*, void* args, void* retval, void*) {
+    auto* player = mods::arg<daAlink_c*>(args, 0);
+    auto& result = *static_cast<bool*>(retval);
+    if (unrestricted_items_enabled() && daAlink_c::checkStageName("F_SP116")) {
+        result = player->checkCargoCarry();
+        return;
+    }
+
+    result = CheckNoSubjectModeCamera::g_orig(player);
+}
+
+void replace_check_not_heavy_boots_stage(ModContext*, void*, void* retval, void*) {
+    auto& result = *static_cast<bool*>(retval);
+    if (unrestricted_items_enabled()) {
+        result = false;
+        return;
+    }
+
+    result = CheckNotHeavyBootsStage::g_orig();
 }
 
 HookAction on_init_kandelaar_swing_pre(ModContext*, void* args, void*, void*) {
@@ -238,6 +269,22 @@ MOD_EXPORT ModResult mod_initialize(ModError*) {
         mods::hook_replace<CheckNewItemChange>(
             svc_hook, replace_check_new_item_change),
         "failed to install CheckNewItemChange");
+    if (result != MOD_OK) {
+        return result;
+    }
+
+    result = install_hook(
+        mods::hook_replace<CheckNoSubjectModeCamera>(
+            svc_hook, replace_check_no_subject_mode_camera),
+        "failed to install CheckNoSubjectModeCamera");
+    if (result != MOD_OK) {
+        return result;
+    }
+
+    result = install_hook(
+        mods::hook_replace<CheckNotHeavyBootsStage>(
+            svc_hook, replace_check_not_heavy_boots_stage),
+        "failed to install CheckNotHeavyBootsStage");
     if (result != MOD_OK) {
         return result;
     }
