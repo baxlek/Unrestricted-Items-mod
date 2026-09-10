@@ -20,6 +20,7 @@ IMPORT_SERVICE(ConfigService, svc_config);
 IMPORT_SERVICE(UiService, svc_ui);
 
 DEFINE_HOOK(&daAlink_c::checkAcceptUseItemInWater, CheckAcceptUseItemInWater);
+DEFINE_HOOK(&daAlink_c::checkCastleTownUseItem, CheckCastleTownUseItem);
 DEFINE_HOOK(&daAlink_c::setStartProcInit, SetStartProcInit);
 DEFINE_HOOK(&daAlink_c::checkItemAction, CheckItemAction);
 DEFINE_HOOK(&daAlink_c::checkItemChangeFromButton, CheckItemChangeFromButton);
@@ -33,6 +34,7 @@ DEFINE_HOOK(&daAlink_c::checkNotHeavyBootsStage, CheckNotHeavyBootsStage);
 DEFINE_HOOK(&daAlink_c::procGrassWhistleWait, ProcGrassWhistleWait);
 DEFINE_HOOK(&daAlink_c::setLight, SetLight);
 DEFINE_HOOK(&dCamera_c::ChangeModeOK, ChangeModeOK);
+DEFINE_HOOK(&dCamera_c::updatePad, UpdatePad);
 
 namespace {
 
@@ -180,6 +182,7 @@ int unrestricted_items_fallback_new_item_change(daAlink_c* player, u8 selected_s
                 return ITEM_PROC_PICK_PUT;
             }
         }
+
     } else if (selected_item != dItemNo_NONE_e && player->mEquipItem != selected_item) {
         if ((player->checkBombItem(selected_item) &&
              !dComIfGp_getSelectItemNum(selected_slot)) ||
@@ -208,6 +211,52 @@ int unrestricted_items_fallback_new_item_change(daAlink_c* player, u8 selected_s
     }
 
     return ITEM_PROC_NONE;
+}
+
+struct SavedCameraModeStyle {
+    dCamera_c* camera;
+    int fallback_index;
+    s16 original_style;
+};
+std::vector<SavedCameraModeStyle> g_update_pad_style_stack;
+
+HookAction on_update_pad_pre(ModContext*, void* args, void*, void*) {
+    auto* camera = mods::arg<dCamera_c*>(args, 0);
+    if (!unrestricted_items_enabled() || !unrestricted_items_camera_stage()) {
+        return HOOK_CONTINUE;
+    }
+
+    const int field_type = camera->GetCameraTypeFromCameraName("FieldS");
+    if (field_type < 0) {
+        return HOOK_CONTINUE;
+    }
+
+    const int fallback_index =
+        camera->mCamTypeData[camera->mCurType].field_0x18[camera->mIsWolf][0] > 0
+            ? camera->mIsWolf
+            : 0;
+    const s16 current_style =
+        camera->mCamTypeData[camera->mCurType].field_0x18[fallback_index][4];
+    const s16 fallback_style =
+        camera->mCamTypeData[field_type].field_0x18[fallback_index][4];
+    if (current_style < 0 && fallback_style >= 0) {
+        g_update_pad_style_stack.push_back({camera, fallback_index, current_style});
+        camera->mCamTypeData[camera->mCurType].field_0x18[fallback_index][4] = fallback_style;
+    }
+
+    return HOOK_CONTINUE;
+}
+
+void on_update_pad_post(ModContext*, void* args, void*, void*) {
+    auto* camera = mods::arg<dCamera_c*>(args, 0);
+    if (!g_update_pad_style_stack.empty() &&
+        g_update_pad_style_stack.back().camera == camera)
+    {
+        const SavedCameraModeStyle saved = g_update_pad_style_stack.back();
+        g_update_pad_style_stack.pop_back();
+        camera->mCamTypeData[camera->mCurType].field_0x18[saved.fallback_index][4] =
+            saved.original_style;
+    }
 }
 
 HookAction on_check_water_in_kandelaar_pre(ModContext*, void* args, void*, void*) {
@@ -240,30 +289,13 @@ void replace_check_new_item_change(ModContext*, void* args, void* retval, void*)
     auto* player = mods::arg<daAlink_c*>(args, 0);
     const u8 selected_slot = mods::arg<u8>(args, 1);
     const u16 selected_item = dComIfGp_getSelectItem(selected_slot);
-    const bool bypass_water_checks = unrestricted_items_water_active(player);
-    const bool bypass_lantern_water_check =
-        unrestricted_items_enabled() &&
-        (selected_item == dItemNo_KANTERA_e || daAlink_c::checkOilBottleItem(selected_item));
-    const f32 saved_water_y = player->mWaterY;
-
-    if (bypass_water_checks) {
-        player->offNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
-    }
-    if (bypass_lantern_water_check) {
-        player->mWaterY = player->current.pos.y;
-    }
-
     auto& result = *static_cast<int*>(retval);
-    result = CheckNewItemChange::g_orig(player, selected_slot);
-
-    if (unrestricted_items_enabled() && result == ITEM_PROC_NONE) {
+    if (unrestricted_items_enabled()) {
         result = unrestricted_items_fallback_new_item_change(player, selected_slot, selected_item);
+        return;
     }
 
-    if (bypass_water_checks) {
-        player->onNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
-    }
-    player->mWaterY = saved_water_y;
+    result = CheckNewItemChange::g_orig(player, selected_slot);
 }
 
 std::vector<daAlink_c*> g_set_light_restore_stack;
@@ -305,6 +337,17 @@ void replace_check_accept_use_item_in_water(ModContext*, void* args, void* retva
     }
 
     result = CheckAcceptUseItemInWater::g_orig(player, item_no) != FALSE;
+}
+
+void replace_check_castle_town_use_item(ModContext*, void* args, void* retval, void*) {
+    const u16 item_no = mods::arg<u16>(args, 0);
+    auto& result = *static_cast<bool*>(retval);
+    if (unrestricted_items_enabled()) {
+        result = true;
+        return;
+    }
+
+    result = CheckCastleTownUseItem::g_orig(item_no);
 }
 
 void replace_swim_delete_item(ModContext*, void* args, void*, void*) {
@@ -521,6 +564,14 @@ MOD_EXPORT ModResult mod_initialize(ModError*) {
     }
 
     result = install_hook(
+        mods::hook_replace<CheckCastleTownUseItem>(
+            svc_hook, replace_check_castle_town_use_item),
+        "failed to install CheckCastleTownUseItem");
+    if (result != MOD_OK) {
+        return result;
+    }
+
+    result = install_hook(
         mods::hook_replace<SetStartProcInit>(svc_hook, replace_set_start_proc_init),
         "failed to install SetStartProcInit");
     if (result != MOD_OK) {
@@ -627,6 +678,20 @@ MOD_EXPORT ModResult mod_initialize(ModError*) {
     result = install_hook(
         mods::hook_replace<ChangeModeOK>(svc_hook, replace_change_mode_ok),
         "failed to install ChangeModeOK");
+    if (result != MOD_OK) {
+        return result;
+    }
+
+    result = install_hook(
+        mods::hook_add_post<UpdatePad>(svc_hook, on_update_pad_post),
+        "failed to install UpdatePad post-hook");
+    if (result != MOD_OK) {
+        return result;
+    }
+
+    result = install_hook(
+        mods::hook_add_pre<UpdatePad>(svc_hook, on_update_pad_pre),
+        "failed to install UpdatePad pre-hook");
     if (result != MOD_OK) {
         return result;
     }
