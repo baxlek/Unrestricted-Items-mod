@@ -14,7 +14,7 @@
     },
     {
       "service_id": "dev.twilitrealm.dusklight.game",
-      "major": 2,
+      "major": 1,
       "min_minor": 0,
       "optional": false
     },
