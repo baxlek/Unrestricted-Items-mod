@@ -33,9 +33,15 @@ bool unrestricted_items_active(const daAlink_c* player) {
     return player->checkNoResetFlg0(daAlink_c::FLG0_WATER_IN_MOVE);
 }
 
+bool water_in_kandelaar_offset(const daAlink_c* player, f32 water_y) {
+    const f32 base_y_pos =
+        player->checkModeFlg(0x40) ? player->mRightFootPos.y : player->current.pos.y;
+    return water_y > 65.0f + base_y_pos;
+}
+
 bool lantern_in_water(const daAlink_c* player) {
     return unrestricted_items_active(player) &&
-           const_cast<daAlink_c*>(player)->checkWaterInKandelaarOffset(player->mWaterY);
+           water_in_kandelaar_offset(player, player->mWaterY);
 }
 
 HookAction on_check_water_in_kandelaar_pre(ModContext*, void* args, void*, void*) {
@@ -44,7 +50,7 @@ HookAction on_check_water_in_kandelaar_pre(ModContext*, void* args, void*, void*
     if (player->mEquipItem == dItemNo_KANTERA_e &&
         unrestricted_items_active(player) &&
         player->checkNoResetFlg2(daAlink_c::FLG2_UNK_1) &&
-        player->checkWaterInKandelaarOffset(water_y))
+        water_in_kandelaar_offset(player, water_y))
     {
         return HOOK_SKIP_ORIGINAL;
     }
@@ -79,7 +85,7 @@ void on_check_new_item_change_post(ModContext*, void* args, void* retval, void*)
         !unrestricted_items_active(player) ||
         player->checkEndResetFlg1(daAlink_c::ERFLG1_UNK_4) ||
         player->checkSpinnerRide() ||
-        player->checkWaterInKandelaarOffset(player->mWaterY) ||
+        water_in_kandelaar_offset(player, player->mWaterY) ||
         (player->checkCanoeRide() && daAlink_c::checkStageName("F_SP127")) ||
         daAlink_c::checkCloudSea() ||
         !daAlink_c::checkCastleTownUseItem(selected_item) ||
